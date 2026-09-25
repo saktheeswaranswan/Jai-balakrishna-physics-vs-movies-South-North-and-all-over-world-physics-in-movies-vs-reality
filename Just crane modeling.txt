@@ -1,0 +1,170 @@
+// 3D Dynamic Counterweight Crane Simulation for APDE (Android)
+// Simulates lifting a 14-ton granite block with trajectory planning
+
+float rotY = 0;
+float trolleyPos = 30; // Starts near mast
+float loadHeight = 0;
+float maxTrolleyPos = 180;
+float counterWeightPos = 20; // Will be calculated dynamically
+
+// Animation State Machine
+int state = 0; 
+float time = 0;
+
+// Crane Specifications
+float mastHeight = 350;
+float jibLength = 250;
+float counterJibLength = 120;
+float loadMass = 14; // 14 tons (Granite)
+float cwMass = 20;   // 20 tons (Counterweight)
+
+void setup() {
+  fullScreen(P3D); // Optimized for Android APDE
+  orientation(LANDSCAPE);
+  noStroke();
+}
+
+void draw() {
+  background(135, 206, 235); // Sky blue
+  
+  // Setup Camera and Lighting
+  camera(width/2 + 300 * cos(time*0.01), height/2 - 200, width/2 + 300 * sin(time*0.01), 
+         width/2, height/2, 0, 
+         0, 1, 0);
+         
+  ambientLight(100, 100, 100);
+  directionalLight(255, 255, 240, -1, 1, -1);
+  
+  // Ground plane
+  pushMatrix();
+  translate(width/2, height/2 + mastHeight/2, 0);
+  fill(100, 150, 100);
+  box(800, 10, 800);
+  popMatrix();
+  
+  // Run Trajectory Planner
+  updateKinematics();
+  
+  // Render Crane System
+  translate(width/2, height/2 + mastHeight/2, 0); // Move to base of crane
+  
+  // 1. Draw Mast (Tower)
+  fill(255, 200, 0); // Construction Yellow
+  drawTrussBox(0, -mastHeight/2, 0, 20, mastHeight, 20);
+  
+  // Move to top of mast for Jib rotation (Slewing mechanism)
+  translate(0, -mastHeight, 0);
+  rotateY(rotY); // Slew gear 
+  
+  // 2. Draw Forward Jib (Truss)
+  pushMatrix();
+  translate(jibLength/2, 0, 0);
+  drawTrussBox(0, 0, 0, jibLength, 15, 15);
+  popMatrix();
+  
+  // 3. Draw Counter-Jib
+  pushMatrix();
+  translate(-counterJibLength/2, 0, 0);
+  fill(200, 150, 0);
+  box(counterJibLength, 15, 15);
+  popMatrix();
+  
+  // 4. Draw Moving Counterweight
+  pushMatrix();
+  translate(-counterWeightPos, -15, 0);
+  fill(100); // Dark metal
+  box(30, 20, 20);
+  popMatrix();
+  
+  // 5. Draw Trolley
+  pushMatrix();
+  translate(trolleyPos, 10, 0);
+  fill(50);
+  box(15, 5, 15);
+  
+  // 6. Draw Hoist Cable
+  stroke(50);
+  strokeWeight(2);
+  line(0, 0, 0, 0, loadHeight, 0);
+  noStroke();
+  
+  // 7. Draw 14-Ton Granite Block
+  translate(0, loadHeight + 10, 0);
+  fill(120, 120, 125); // Granite Grey
+  box(25, 20, 15); // Scaled representation of ~5 cubic meters
+  popMatrix();
+  
+  time++;
+}
+
+// Custom function to draw a stylized Truss structure for performance on Android
+void drawTrussBox(float x, float y, float z, float w, float h, float d) {
+  pushMatrix();
+  translate(x, y, z);
+  
+  // Main structural beams
+  stroke(0);
+  strokeWeight(1);
+  noFill();
+  box(w, h, d);
+  
+  // Inner X-bracing (Simplified for P3D performance)
+  int segments = int(max(w, h) / 20);
+  float stepX = w / segments;
+  float stepY = h / segments;
+  
+  for(int i = 0; i < segments; i++) {
+    if(w > h) {
+      // Horizontal Jib truss bracing
+      float startX = -w/2 + (i * stepX);
+      line(startX, -h/2, d/2, startX + stepX, h/2, d/2);
+      line(startX, h/2, d/2, startX + stepX, -h/2, d/2);
+    } else {
+      // Vertical Mast truss bracing
+      float startY = -h/2 + (i * stepY);
+      line(-w/2, startY, d/2, w/2, startY + stepY, d/2);
+      line(w/2, startY, d/2, -w/2, startY + stepY, d/2);
+    }
+  }
+  noStroke();
+  popMatrix();
+}
+
+// Trajectory and Physics Update loop
+void updateKinematics() {
+  // Active Counterweight Physics Equation: M1 * D1 = M2 * D2
+  // loadMass * trolleyPos = cwMass * counterWeightPos
+  counterWeightPos = (loadMass * trolleyPos) / cwMass;
+  
+  // Trajectory State Machine
+  switch(state) {
+    case 0: // Lower Hook
+      loadHeight += 1;
+      if(loadHeight > mastHeight - 50) state = 1;
+      break;
+    case 1: // Lift Granite Block
+      loadHeight -= 0.8; // Heavy load, slow lift (Gearbox sim)
+      if(loadHeight < 40) state = 2;
+      break;
+    case 2: // Slew (Rotate) and Move Trolley Out simultaneously
+      rotY += 0.005;
+      if(trolleyPos < maxTrolleyPos) trolleyPos += 0.5;
+      if(rotY > PI/2) state = 3;
+      break;
+    case 3: // Lower Block to new site
+      loadHeight += 1;
+      if(loadHeight > mastHeight - 50) state = 4;
+      break;
+    case 4: // Return to start
+      loadHeight -= 1.5; // Empty hook, fast lift
+      if(loadHeight < 40) {
+        if(trolleyPos > 30) trolleyPos -= 1;
+        rotY -= 0.01;
+        if(rotY <= 0 && trolleyPos <= 30) {
+          rotY = 0;
+          state = 0; // Loop animation
+        }
+      }
+      break;
+  }
+}
