@@ -1,0 +1,379 @@
+// ==============================================================================
+// ADVANCED TRUSS CRANE SIMULATOR (HYBRID PID + FUZZY LOGIC + CVT TRANSMISSION)
+// Features: Active Weight Balancing, Cable Tension Physics, Trajectory Tracking
+// ==============================================================================
+
+// --- Physical & Crane Parameters ---
+float craneHeight = 400; 
+float jibLength = 500;
+float backJibLength = 200;
+float gravity = 9.81;
+
+// --- Trolley (Horizontal Axis) ---
+float trolleyX = 100;
+float trolleyV = 0;
+float trolleyMass = 50.0;
+float trolleyForce = 0;
+
+// --- Hoist / Cable (Vertical Axis) ---
+float cableL = 200; // Cable Length
+float cableV = 0;
+float payloadMass = 250.0;
+float hoistForce = 0;
+float cableTension = 0;
+
+// --- Payload Pendulum Dynamics ---
+float theta = 0; // Sway angle
+float omega = 0; // Sway angular velocity
+
+// --- Active Counterweight ---
+float cwX = -100; // Counterweight position (negative is left of mast)
+float cwMass = 500.0;
+
+// --- CVT / Gearbox State ---
+// The transmission smoothly shifts between high-torque (low gear) and high-speed (high gear)
+float cvtRatioX = 1.0; 
+float cvtRatioL = 1.0;
+
+// --- Trajectory & Waypoints ---
+PVector[] waypoints;
+int currentWaypoint = 0;
+float targetX = 0;
+float targetL = 0;
+
+// --- Simulation Scale ---
+float sPx = 1.0; // Scale factor for drawing
+
+void setup() {
+  size(1280, 720, P2D);
+  smooth(8);
+  textAlign(LEFT, CENTER);
+  
+  // Define the desired trajectory path (X position, Cable Length)
+  waypoints = new PVector[]{
+    new PVector(100, 200),
+    new PVector(350, 100), // Lift and move right
+    new PVector(450, 300), // Drop into a zone
+    new PVector(250, 250), // Move back and lift slightly
+    new PVector(100, 350)  // Return home and drop
+  };
+  
+  targetX = waypoints[0].x;
+  targetL = waypoints[0].y;
+}
+
+void draw() {
+  background(15, 20, 25);
+  drawGrid();
+  
+  // Physics sub-stepping for stability
+  int steps = 10;
+  float dt = 0.016 / steps;
+  
+  for (int i = 0; i < steps; i++) {
+    updateTrajectory();
+    computeControllers();
+    updatePhysics(dt);
+  }
+  
+  pushMatrix();
+  translate(width / 2.0 - 150, height - 50); // Base of the crane
+  
+  drawTrajectoryPath();
+  drawTrussCrane();
+  drawPayloadAndCables();
+  
+  popMatrix();
+  
+  drawHUD();
+}
+
+// ========================================================
+// 1. KINEMATICS & PHYSICS ENGINE
+// ========================================================
+void updatePhysics(float dt) {
+  // --- Pendulum / Sway Dynamics ---
+  // Non-linear equation of motion for a pendulum on a moving cart with varying length
+  float sinT = sin(theta);
+  float cosT = cos(theta);
+  
+  float trolleyAccel = trolleyForce / trolleyMass;
+  float hoistAccel = hoistForce / payloadMass;
+  
+  // Angular acceleration of the payload
+  float alpha = (-gravity * sinT - trolleyAccel * cosT - 2.0 * cableV * omega) / cableL;
+  
+  omega += alpha * dt;
+  theta += omega * dt;
+  
+  // --- Trolley Dynamics (X Axis) ---
+  trolleyV += trolleyAccel * dt;
+  trolleyV *= 0.98; // Friction/damping
+  trolleyX += trolleyV * dt;
+  
+  // --- Hoist Dynamics (L Axis) ---
+  cableV += hoistAccel * dt;
+  cableV *= 0.95; // Mechanical friction in pulleys
+  cableL += cableV * dt;
+  
+  // Constraints
+  trolleyX = constrain(trolleyX, 30, jibLength - 20);
+  cableL = constrain(cableL, 20, craneHeight - 20);
+  
+  // --- Cable Tension Calculation ---
+  // T = m(g*cos(theta) + L*omega^2 + a_L - a_x*sin(theta))
+  cableTension = payloadMass * (gravity * cosT + cableL * omega * omega + hoistAccel - trolleyAccel * sinT);
+  
+  // --- Active Counterweight Balancing ---
+  // Torque balance: (trolleyMass + payloadMass) * trolleyX = cwMass * |cwX|
+  float targetCwX = -((trolleyMass + payloadMass) * trolleyX) / cwMass;
+  targetCwX = constrain(targetCwX, -backJibLength + 20, -20);
+  cwX += (targetCwX - cwX) * 2.0 * dt; // Motor smoothly moves counterweight
+}
+
+// ========================================================
+// 2. HYBRID CONTROL SYSTEM (PID + FUZZY + CVT)
+// ========================================================
+void computeControllers() {
+  // --- PID Controller for Trolley (X-axis) ---
+  float errX = targetX - trolleyX;
+  float p_X = errX * 12.0;
+  float d_X = -trolleyV * 25.0;
+  float baseTrolleyForce = p_X + d_X;
+  
+  // --- PID Controller for Hoist (L-axis) ---
+  float errL = targetL - cableL;
+  float p_L = errL * 15.0;
+  float d_L = -cableV * 20.0;
+  // Feed-forward to counteract gravity on the payload
+  float feedForwardL = payloadMass * gravity; 
+  hoistForce = constrain(p_L + d_L + feedForwardL, -2000, 5000);
+  
+  // --- FUZZY LOGIC ANTI-SWAY CONTROLLER ---
+  // Evaluates sway angle (theta) and sway velocity (omega) to apply counter-forces
+  float fN_A = triMF(theta, -0.3, -0.1, 0);
+  float fZ_A = triMF(theta, -0.1, 0, 0.1);
+  float fP_A = triMF(theta, 0, 0.1, 0.3);
+  
+  float fN_V = triMF(omega, -1.0, -0.2, 0);
+  float fZ_V = triMF(omega, -0.2, 0, 0.2);
+  float fP_V = triMF(omega, 0, 0.2, 1.0);
+
+  // Fuzzy Rule Base Matrix
+  float[] w = {
+    min(fN_A, fN_V), min(fN_A, fZ_V), min(fN_A, fP_V),
+    min(fZ_A, fN_V), min(fZ_A, fZ_V), min(fZ_A, fP_V),
+    min(fP_A, fN_V), min(fP_A, fZ_V), min(fP_A, fP_V)
+  };
+  // Counter-force required to dampen the specific sway states
+  float[] f = { -400, -200, 0, -200, 0, 200, 0, 200, 400 };
+  
+  float num = 0, den = 0;
+  for(int i=0; i<9; i++) { num += w[i]*f[i]; den += w[i]; }
+  float fuzzyAntiSwayForce = (den == 0) ? 0 : (num / den);
+  
+  // Combine PID and Fuzzy Anti-Sway
+  float requestedTrolleyForce = baseTrolleyForce + fuzzyAntiSwayForce;
+  
+  // --- CVT / GEARBOX SIMULATION ---
+  // Automatically adjust mechanical advantage based on load and velocity
+  // High load/err -> High Ratio (Torque mode). Low load -> Low Ratio (Speed mode).
+  float loadFactor = constrain(abs(errX) / 100.0, 0, 1);
+  float targetCvtX = map(loadFactor, 0, 1, 0.5, 3.0); // Ratio shifts from 0.5 to 3.0
+  cvtRatioX += (targetCvtX - cvtRatioX) * 0.05; // Smooth shifting
+  
+  // Apply CVT transmission effect (Multiplies torque, limits top speed capability inherently in a real system)
+  float motorEffort = constrain(requestedTrolleyForce / cvtRatioX, -500, 500); 
+  trolleyForce = motorEffort * cvtRatioX;
+}
+
+// ========================================================
+// 3. TRAJECTORY MANAGER
+// ========================================================
+void updateTrajectory() {
+  PVector currentTarget = waypoints[currentWaypoint];
+  
+  // If payload is close enough to waypoint and not swaying wildly, advance
+  float distToTarget = dist(trolleyX, cableL, currentTarget.x, currentTarget.y);
+  if (distToTarget < 10.0 && abs(theta) < 0.05 && abs(omega) < 0.05) {
+    currentWaypoint = (currentWaypoint + 1) % waypoints.length;
+    targetX = waypoints[currentWaypoint].x;
+    targetL = waypoints[currentWaypoint].y;
+  }
+}
+
+// ========================================================
+// 4. GRAPHICS & RENDERING
+// ========================================================
+void drawTrussCrane() {
+  stroke(200);
+  
+  // Draw Mast (Vertical Truss)
+  drawTrussSegment(0, 0, 0, -craneHeight, 40, true);
+  
+  // Draw Jib (Forward Horizontal Truss)
+  drawTrussSegment(0, -craneHeight, jibLength, -craneHeight, 30, false);
+  
+  // Draw Counter-Jib (Backward Horizontal Truss)
+  drawTrussSegment(0, -craneHeight, -backJibLength, -craneHeight, 30, false);
+  
+  // Tower Top (Pyramid / A-Frame above jib)
+  stroke(255, 150, 50); strokeWeight(4);
+  line(0, -craneHeight, 0, -craneHeight - 60); // Pinnacle
+  strokeWeight(2); stroke(150);
+  line(0, -craneHeight - 60, jibLength * 0.6, -craneHeight); // Front tie bar
+  line(0, -craneHeight - 60, -backJibLength * 0.8, -craneHeight); // Back tie bar
+}
+
+void drawTrussSegment(float x1, float y1, float x2, float y2, float thickness, boolean vertical) {
+  stroke(180); strokeWeight(3);
+  float len = dist(x1, y1, x2, y2);
+  pushMatrix();
+  translate(x1, y1);
+  rotate(atan2(y2 - y1, x2 - x1));
+  
+  // Main chords
+  line(0, -thickness/2, len, -thickness/2);
+  line(0, thickness/2, len, thickness/2);
+  
+  // Zig-zag truss web
+  strokeWeight(1.5);
+  int sections = int(len / (thickness * 1.2));
+  float secLen = len / sections;
+  for(int i=0; i<sections; i++) {
+    float curX = i * secLen;
+    float nxtX = (i+1) * secLen;
+    line(curX, -thickness/2, curX + secLen/2, thickness/2);
+    line(curX + secLen/2, thickness/2, nxtX, -thickness/2);
+    line(curX, -thickness/2, curX, thickness/2); // Vertical supports
+  }
+  popMatrix();
+}
+
+void drawPayloadAndCables() {
+  float yOffset = -craneHeight;
+  
+  // -- Active Counterweight --
+  fill(100, 120, 140); stroke(200); strokeWeight(2);
+  rectMode(CENTER);
+  rect(cwX, yOffset + 15, 60, 40, 5); // CW blocks
+  fill(255, 50, 50); noStroke();
+  ellipse(cwX, yOffset, 12, 12); // CW Trolley wheel
+  
+  // -- Trolley --
+  fill(255, 200, 50); stroke(200); strokeWeight(2);
+  rect(trolleyX, yOffset, 40, 20, 4);
+  fill(50); noStroke();
+  ellipse(trolleyX - 12, yOffset - 10, 8, 8);
+  ellipse(trolleyX + 12, yOffset - 10, 8, 8);
+  
+  // -- Cable (Color reflects Tension) --
+  // Base tension at rest = payloadMass * gravity (~2450)
+  float stress = map(cableTension, payloadMass*gravity, payloadMass*gravity * 1.5, 0, 1);
+  stress = constrain(stress, 0, 1);
+  color cableColor = lerpColor(color(200, 200, 200), color(255, 50, 50), stress);
+  
+  float payloadX = trolleyX + sin(theta) * cableL;
+  float payloadY = yOffset + cos(theta) * cableL;
+  
+  stroke(cableColor); strokeWeight(map(stress, 0, 1, 2, 4));
+  line(trolleyX, yOffset + 10, payloadX, payloadY);
+  
+  // -- Payload --
+  fill(80, 180, 255); stroke(255); strokeWeight(2);
+  rect(payloadX, payloadY, 35, 35, 5);
+  
+  // Crosshair on payload center
+  stroke(0, 100); strokeWeight(1);
+  line(payloadX - 10, payloadY, payloadX + 10, payloadY);
+  line(payloadX, payloadY - 10, payloadX, payloadY + 10);
+  rectMode(CORNER);
+}
+
+void drawTrajectoryPath() {
+  // Draw waypoints and connecting path
+  noFill(); stroke(0, 255, 100, 100); strokeWeight(2);
+  beginShape();
+  for (PVector wp : waypoints) {
+    vertex(wp.x, -craneHeight + wp.y);
+  }
+  endShape();
+  
+  // Draw target markers
+  for (int i=0; i<waypoints.length; i++) {
+    float wx = waypoints[i].x;
+    float wy = -craneHeight + waypoints[i].y;
+    
+    if (i == currentWaypoint) {
+      fill(0, 255, 100, 80); noStroke();
+      ellipse(wx, wy, 40, 40); // Active waypoint pulse
+      stroke(0, 255, 100);
+    } else {
+      stroke(100, 150, 100);
+    }
+    
+    strokeWeight(2); noFill();
+    ellipse(wx, wy, 15, 15);
+  }
+}
+
+void drawGrid() {
+  stroke(255, 15); strokeWeight(1);
+  for (int x = 0; x < width; x += 50) line(x, 0, x, height);
+  for (int y = 0; y < height; y += 50) line(0, y, width, y);
+}
+
+// ========================================================
+// 5. HUD & TELEMETRY
+// ========================================================
+void drawHUD() {
+  fill(10, 20, 30, 220); stroke(50, 100, 150); strokeWeight(2);
+  rect(20, 20, 350, 310, 10);
+  
+  fill(255); textSize(16);
+  text("CRANE SYSTEM TELEMETRY", 40, 45);
+  stroke(100); line(40, 60, 340, 60);
+  
+  textSize(14);
+  int y = 80; int step = 22;
+  fill(200);
+  text("Waypoint Tracker:", 40, y); fill(0, 255, 100); text((currentWaypoint + 1) + " / " + waypoints.length, 200, y); y += step;
+  
+  fill(200); text("Trolley Target (X):", 40, y); fill(255); text(nf(targetX, 0, 1) + " m", 200, y); y += step;
+  fill(200); text("Hoist Target (L):", 40, y); fill(255); text(nf(targetL, 0, 1) + " m", 200, y); y += step;
+  
+  y += step/2; stroke(100); line(40, y, 340, y); y += step;
+  
+  fill(200); text("Active Sway Angle:", 40, y); 
+  // Color code sway danger
+  if(abs(theta) > 0.15) fill(255, 50, 50); else fill(50, 255, 50);
+  text(nf(degrees(theta), 0, 2) + " °", 200, y); y += step;
+  
+  fill(200); text("Cable Tension:", 40, y); 
+  float restTension = payloadMass * gravity;
+  if (cableTension > restTension * 1.2) fill(255, 100, 100); else fill(255);
+  text(nf(cableTension, 0, 0) + " N", 200, y); y += step;
+  
+  y += step/2; stroke(100); line(40, y, 340, y); y += step;
+  
+  fill(200); text("Trolley CVT Ratio:", 40, y); fill(100, 200, 255); text(nf(cvtRatioX, 0, 2) + " : 1", 200, y); y += step;
+  
+  // Show simulated Gear State based on CVT
+  String gearState = "CRUISING (HIGH)";
+  if (cvtRatioX > 2.0) gearState = "TORQUE (LOW)";
+  else if (cvtRatioX > 1.2) gearState = "ACCELERATING";
+  
+  fill(200); text("Gearbox State:", 40, y); fill(255, 200, 50); text(gearState, 200, y); y += step;
+  
+  fill(200); text("Balancing C.W. Pos:", 40, y); fill(255); text(nf(cwX, 0, 1), 200, y); y += step;
+}
+
+// ========================================================
+// HELPER: FUZZY LOGIC TRIANGLE MEMBERSHIP
+// ========================================================
+float triMF(float val, float a, float b, float c) {
+  if (val <= a || val >= c) return 0;
+  if (val == b) return 1;
+  if (val < b) return (val - a) / (b - a);
+  return (c - val) / (c - b);
+}
