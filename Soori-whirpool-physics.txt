@@ -1,0 +1,401 @@
+// === WHIRLPOOL RESCUE 3D ANIMATION FOR APDE ===
+// Story: Extreme deep tornado whirlpool extending to sea bottom[span_0](start_span)[span_0](end_span) -> 
+// Boat orbits top layer -> Victim falls in & stops midway down -> 
+// Glowing red laser traces his deep fall -> Boat dynamically dives down steep slope to midway -> 
+// Hero rescues him -> Hero jumps to mast -> Sailboat unfurls sail -> Escapes vortex.
+
+float animTime = 0;
+final float MAX_TIME = 1300; // Extended loop duration for the long sequence
+
+// Interactive Camera Variables
+float camRotX = PI / 3.5; // Angled to see the deep tornado funnel
+float camRotY = 0;
+
+void setup() {
+  fullScreen(P3D); 
+  orientation(LANDSCAPE);
+  noStroke();
+  sphereDetail(5); // Keep mobile performance high
+}
+
+void draw() {
+  background(10, 20, 35); // Dark, atmospheric deep-sea sky
+  
+  // Setup Lighting
+  lights();
+  ambientLight(90, 140, 160); // Cyan/Teal ambient matching the reference
+  directionalLight(255, 255, 255, -0.5, 1, -1);
+
+  // Apply Interactive 360-Degree Camera Rotation
+  translate(width / 2.0, height / 2.0, -800); // Push far back to view the massive depth
+  rotateX(camRotX);
+  rotateY(camRotY);
+  translate(0, -300, 0); // Shift pivot point to the middle of the extreme funnel
+
+  // Advance animation timeline
+  animTime += 1.5;
+  if (animTime > MAX_TIME) animTime = 0; // Loop animation
+
+  drawTornadoOceanWhirlpool();
+  drawVictimRedLaserTrajectory(animTime);
+  drawBoatWakeTrail(animTime);
+  animateAndDrawScene(animTime);
+  
+  drawHUD(); 
+}
+
+// User Interaction: Drag to rotate the 3D scene freely in 360 degrees
+void mouseDragged() {
+  camRotY += (mouseX - pmouseX) * 0.01;
+  camRotX += (pmouseY - mouseY) * 0.01; 
+  // No constraints applied; enables full 360-degree tumbling and underwater views
+}
+
+// ==========================================
+// 1. GENERATE THE EXTREME TORNADO WHIRLPOOL
+// ==========================================
+void drawTornadoOceanWhirlpool() {
+  pushMatrix();
+  strokeWeight(1.5);
+  
+  int radSteps = 40; // High resolution for extreme depth
+  int angSteps = 40;
+  
+  for (int i = 1; i < radSteps; i++) {
+    float r1 = i * 15; // Tighter radius steps for the funnel
+    float r2 = (i + 1) * 15;
+    
+    beginShape(QUAD_STRIP);
+    for (int j = 0; j <= angSteps; j++) {
+      float a = map(j, 0, angSteps, 0, TWO_PI);
+      
+      // Intense spinning effect
+      float spin = frameCount * 0.06;
+      float a1 = a + spin + (250.0 / max(r1, 1));
+      float a2 = a + spin + (250.0 / max(r2, 1));
+
+      float y1 = getWhirlpoolDepth(r1);
+      float y2 = getWhirlpoolDepth(r2);
+
+      // Deep teal and white foam texturing matching the reference[span_1](start_span)[span_1](end_span)
+      if ((i + j) % 5 == 0) {
+        fill(180, 240, 255, 190); // Cyan/White foam[span_2](start_span)[span_2](end_span)
+        stroke(100, 200, 220, 120);
+      } else {
+        fill(0, 90, 110, 240); // Deep sea teal core[span_3](start_span)[span_3](end_span)
+        noStroke();
+      }
+
+      vertex(r1 * cos(a1), y1, r1 * sin(a1));
+      vertex(r2 * cos(a2), y2, r2 * sin(a2));
+    }
+    endShape();
+  }
+  noStroke();
+  popMatrix();
+}
+
+// Center is a highly extreme funnel extending to the sea bottom (Y=1200)[span_4](start_span)[span_4](end_span)
+float getWhirlpoolDepth(float radius) {
+  // Power curve creates a sheer, tornado-like drop near the center
+  float normalized = pow(radius / 600.0, 0.55); 
+  return map(normalized, 0, 1, 1200, -20);
+}
+
+
+// ==========================================
+// 2. HELPER FUNCTIONS FOR TRAJECTORIES
+// ==========================================
+float getBoatR(float t) {
+  if (t < 250) return 400; // Hold safe outer orbit on the top layer
+  if (t < 500) {
+    // Steep spiral dive downward
+    float prog = map(t, 250, 500, 0, PI);
+    return map(cos(prog), 1, -1, 400, 110); // Dives to R=110 (Midway depth)
+  }
+  if (t < 800) return 110; // Hold orbit at the halfway point for rescue
+  
+  // Burst out rapidly, breaking the tight orbit to escape
+  float escT = (t - 800) * 0.35;
+  return 110 + pow(escT, 2.6); 
+}
+
+float getBoatTheta(float t) {
+  if (t < 800) return t * 0.04; 
+  return 800 * 0.04 - (t - 800) * 0.015; // Curve outward against the spin during escape
+}
+
+float getBoatX(float t) { return getBoatR(t) * cos(getBoatTheta(t)); }
+float getBoatZ(float t) { return getBoatR(t) * sin(getBoatTheta(t)); }
+
+// -- VICTIM MATHEMATICS --
+float getVictimR(float t) {
+  if (t < 150) return 400; // Starts safe on the top layer
+  if (t < 350) return map(t, 150, 350, 400, 110); // Plummets to midway depth
+  return 110; // Trapped halfway down the tornado funnel
+}
+float getVictimTheta(float t) {
+  return t * 0.055; // Spins faster due to being deeper in the vortex
+}
+
+// ==========================================
+// 3. DRAW RED LASER TRAJECTORY & WAKE TRAIL
+// ==========================================
+void drawVictimRedLaserTrajectory(float t) {
+  if (t > 150) {
+    noFill();
+    
+    // Draw thick glowing outer laser tube
+    stroke(255, 20, 20, 90);
+    strokeWeight(14);
+    drawLaserPath(t);
+    
+    // Draw bright inner core laser line
+    stroke(255, 100, 100, 255);
+    strokeWeight(4);
+    drawLaserPath(t);
+    
+    noStroke();
+  }
+}
+
+void drawLaserPath(float t) {
+  beginShape(LINE_STRIP);
+  float endT = min(t, 600); // Stop tracing once the rescue is completed
+  for (float pt = 150; pt <= endT; pt += 3) {
+    float r = getVictimR(pt);
+    float th = getVictimTheta(pt);
+    float vx = r * cos(th);
+    float vz = r * sin(th);
+    float vy = getWhirlpoolDepth(r) - 5;
+    vertex(vx, vy, vz);
+  }
+  endShape();
+}
+
+void drawBoatWakeTrail(float t) {
+  noFill();
+  stroke(255, 255, 255, 200); 
+  strokeWeight(8);
+  
+  beginShape(LINE_STRIP);
+  for (float pt = max(0, t - 60); pt <= t; pt += 2) {
+    float bx = getBoatX(pt);
+    float bz = getBoatZ(pt);
+    float by = getWhirlpoolDepth(getBoatR(pt)) - 2;
+    vertex(bx, by, bz);
+  }
+  endShape();
+  noStroke();
+}
+
+
+// ==========================================
+// 4. SCENE ANIMATION STATE MACHINE
+// ==========================================
+void animateAndDrawScene(float t) {
+  
+  // -- CALCULATE BOAT POSITION & ALIGNMENT --
+  float boatX = getBoatX(t);
+  float boatZ = getBoatZ(t);
+  float boatR = getBoatR(t);
+  float boatY = getWhirlpoolDepth(boatR) - 5;
+
+  float pastX = getBoatX(max(0, t - 1.0));
+  float pastZ = getBoatZ(max(0, t - 1.0));
+  float pastR = getBoatR(max(0, t - 1.0));
+  float pastY = getWhirlpoolDepth(pastR) - 5;
+
+  float boatHeading = atan2(boatZ - pastZ, boatX - pastX);
+  
+  // Pitch (Dynamic Up/Down angle for the extremely steep funnel)
+  float hDist = dist(pastX, pastZ, boatX, boatZ);
+  float boatPitch = atan2(boatY - pastY, hDist); 
+
+  // Roll (Side to side bank against the water wall)
+  float portX = boatX + cos(boatHeading - HALF_PI) * 15;
+  float portZ = boatZ + sin(boatHeading - HALF_PI) * 15;
+  float starX = boatX + cos(boatHeading + HALF_PI) * 15;
+  float starZ = boatZ + sin(boatHeading + HALF_PI) * 15;
+  
+  float portY = getWhirlpoolDepth(dist(0, 0, portX, portZ));
+  float starY = getWhirlpoolDepth(dist(0, 0, starX, starZ));
+  float boatRoll = atan2(starY - portY, 30); 
+
+
+  // -- VICTIM LOGIC (Red Stickman) --
+  boolean victimInWater = false;
+  float vicGlobalX = 0, vicGlobalY = 0, vicGlobalZ = 0;
+  float vicLocalX = 0, vicLocalY = -10, vicLocalZ = 0;
+
+  if (t < 150) {
+    vicLocalX = 15; vicLocalZ = 12; // On boat
+  }
+  else if (t < 540) {
+    // Falling in and trapped midway down the tornado
+    victimInWater = true;
+    float vr = getVictimR(t);
+    float vth = getVictimTheta(t);
+    vicGlobalX = vr * cos(vth);
+    vicGlobalZ = vr * sin(vth);
+    vicGlobalY = getWhirlpoolDepth(vr) - 5;
+  }
+  else if (t < 600) {
+    // Mid-way Rescue: Lerp from water strictly to the boat
+    victimInWater = true;
+    float pullProg = (t - 540) / 60.0;
+    float sX = 110 * cos(540 * 0.055);
+    float sZ = 110 * sin(540 * 0.055);
+    float sY = getWhirlpoolDepth(110) - 5;
+    
+    vicGlobalX = lerp(sX, boatX, pullProg);
+    vicGlobalZ = lerp(sZ, boatZ, pullProg);
+    vicGlobalY = lerp(sY, boatY - 10, pullProg); 
+  }
+  else if (t < 650) {
+    vicLocalX = map(t, 600, 650, 0, -5);
+    vicLocalZ = map(t, 600, 650, 15, -10);
+  } else {
+    vicLocalX = -5; vicLocalZ = -10; // Safe
+  }
+
+  // -- RESCUER LOGIC (Green Stickman) --
+  float resLocalX = 0, resLocalY = -10, resLocalZ = 0;
+  
+  if (t < 250) {
+    resLocalX = -15; resLocalZ = -12;
+  } else if (t < 540) {
+    resLocalX = map(max(250, t), 250, 540, -15, 0);
+    resLocalZ = map(max(250, t), 250, 540, -12, 15);
+  } else if (t < 600) {
+    resLocalX = 0; resLocalZ = 15; // Reaching out
+  } else if (t < 650) {
+    resLocalX = map(t, 600, 650, 0, -15);
+    resLocalZ = map(t, 600, 650, 15, -10);
+  } else if (t < 700) {
+    resLocalX = map(t, 650, 700, -15, 0);
+    resLocalZ = map(t, 650, 700, -10, 0);
+    resLocalY = -10 - sin(map(t, 650, 700, 0, PI)) * 30; // High Jump to Mast
+  } else if (t < 750) {
+    resLocalX = map(t, 700, 750, 0, 35); // Sprint to front bow
+  } else {
+    resLocalX = 35; // Holding rope, steering escape
+  }
+
+  // Render Victim
+  if (victimInWater) {
+    pushMatrix();
+    translate(vicGlobalX, vicGlobalY, vicGlobalZ);
+    drawLocalPerson(color(255, 50, 50)); 
+    popMatrix();
+  }
+
+  // Render Boat and Crew
+  drawBoatAndCrew(boatX, boatY, boatZ, boatHeading, boatPitch, boatRoll, t,
+                  resLocalX, resLocalY, resLocalZ,
+                  vicLocalX, vicLocalY, vicLocalZ, !victimInWater);
+}
+
+
+// ==========================================
+// 5. DRAWING HELPER FUNCTIONS
+// ==========================================
+void drawBoatAndCrew(float bX, float bY, float bZ, float heading, float pitch, float roll, float t,
+                     float resX, float resY, float resZ,
+                     float vicX, float vicY, float vicZ, boolean vicOnBoard) {
+  pushMatrix();
+  translate(bX, bY, bZ);
+  
+  // Dynamically align boat matrix to the steep water slope
+  rotateY(-heading);
+  rotateZ(pitch);
+  rotateX(-roll);
+
+  // Draw Boat Hull
+  fill(139, 69, 19); 
+  box(80, 20, 30);
+
+  // Draw Sailboat Mast
+  pushMatrix();
+  translate(0, -60, 0);
+  fill(120);
+  box(4, 110, 4); // Extremely tall mast to support the dramatic escape
+
+  // Unfurl Sail aggressively once the hero triggers it
+  if (t > 700) {
+    fill(250, 250, 255);
+    beginShape();
+    vertex(0, -50, 0);   
+    vertex(55, -10, 25);  // Billowing far out
+    vertex(0, 40, 0);    
+    endShape(CLOSE);
+  }
+  popMatrix();
+
+  // Draw steering rope from front bow to mast for the escape sequence
+  if (t > 740) {
+    stroke(255, 40, 40); // Vivid red rope matching the laser theme
+    strokeWeight(3.5);
+    line(0, -20, 0, 35, -10, 0); 
+    noStroke();
+  }
+
+  // Draw passive Crew members
+  for (int i = 0; i < 6; i++) {
+    pushMatrix();
+    float xOffset = map(i, 0, 5, -30, 30);
+    float zOffset = (i % 2 == 0) ? 10 : -10;
+    translate(xOffset, -10, zOffset); 
+    drawLocalPerson(color(200, 150, 0)); 
+    popMatrix();
+  }
+  
+  // Draw Rescuer (Green)
+  pushMatrix();
+  translate(resX, resY, resZ);
+  drawLocalPerson(color(50, 255, 50));
+  
+  if (t >= 540 && t < 600) {
+    stroke(50, 255, 50);
+    strokeWeight(4);
+    line(0, 0, 0, 0, 25, 12); // Arm extended downwards to grab victim
+    noStroke();
+  }
+  popMatrix();
+
+  if (vicOnBoard) {
+    pushMatrix();
+    translate(vicX, vicY, vicZ);
+    drawLocalPerson(color(255, 50, 50));
+    popMatrix();
+  }
+  
+  popMatrix(); 
+}
+
+// Renders individual character geometry
+void drawLocalPerson(int c) {
+  fill(c);
+  pushMatrix();
+  translate(0, -15, 0);
+  sphere(5);
+  popMatrix();
+  box(6, 16, 5);
+}
+
+// User Interface
+void drawHUD() {
+  hint(DISABLE_DEPTH_TEST);
+  camera(); 
+  noLights();
+  
+  fill(0, 160);
+  rect(0, 0, width, 55);
+  
+  fill(255);
+  textSize(24);
+  textAlign(CENTER, CENTER);
+  text("DRAG TO ROTATE 360° | VIEW DEEP TORNADO VORTEX", width / 2.0, 27);
+  
+  hint(ENABLE_DEPTH_TEST);
+}
